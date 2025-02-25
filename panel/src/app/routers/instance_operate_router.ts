@@ -1,11 +1,11 @@
 import Router from "@koa/router";
-import permission from "../middleware/permission";
+import permission, { verificationFailed } from "../middleware/permission";
 import validator from "../middleware/validator";
 import RemoteServiceSubsystem from "../service/remote_service";
 import RemoteRequest, { RemoteRequestTimeoutError } from "../service/remote_command";
 import { timeUuid } from "../service/password";
 import { getUserUuid } from "../service/passport_service";
-import { isHaveInstanceByUuid, isTopPermission } from "../service/permission_service";
+import { isHaveInstanceByUuid } from "../service/permission_service";
 import { $t } from "../i18n";
 import { isTopPermissionByUuid } from "../service/permission_service";
 import { isEmpty, toText, toBoolean, toNumber } from "common";
@@ -420,9 +420,36 @@ router.put(
       const crlf = !isEmpty(config.crlf) ? toNumber(config?.crlf) : null;
       const oe = !isEmpty(config.oe) ? toText(config?.oe) : null;
       const ie = !isEmpty(config.ie) ? toText(config?.ie) : null;
+      const fileCode = toText(config.fileCode);
       const stopCommand = config.stopCommand ? toText(config.stopCommand) : null;
+      const startCommand = toText(config.startCommand);
+      const updateCommand = toText(config.updateCommand);
 
       const remoteService = RemoteServiceSubsystem.getInstance(daemonId || "");
+
+      const instance = await new RemoteRequest(remoteService).request("instance/detail", {
+        instanceUuid
+      });
+
+      const isCmdChanged = (cmd: string | null, instanceCmd: string) => cmd !== instanceCmd;
+      const hasPermission = isTopPermissionByUuid(getUserUuid(ctx));
+
+      if (
+        (startCommand || updateCommand) &&
+        isCmdChanged(startCommand, instance.config.startCommand) &&
+        isCmdChanged(updateCommand, instance.config.updateCommand)
+      ) {
+        if (instance.config.processType !== "docker" && !hasPermission)
+          return verificationFailed(ctx);
+
+        if (
+          instance.config.processType === "docker" &&
+          !systemConfig?.allowChangeCmd &&
+          !hasPermission
+        )
+          return verificationFailed(ctx);
+      }
+
       const result = await new RemoteRequest(remoteService).request("instance/update", {
         instanceUuid,
         config: {
@@ -438,7 +465,10 @@ router.put(
           rconPort,
           rconPassword,
           enableRcon,
-          tag: instanceTags
+          tag: instanceTags,
+          fileCode,
+          startCommand: startCommand ?? instance.startCommand,
+          updateCommand: updateCommand ?? instance.updateCommand
         }
       });
       ctx.body = result;
